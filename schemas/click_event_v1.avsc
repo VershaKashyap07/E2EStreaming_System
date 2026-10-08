@@ -1,0 +1,22 @@
+{
+  "type": "record",
+  "name": "ClickEvent",
+  "namespace": "com.akansha.ecommerce",
+  "doc": "v1 schema for e-commerce clickstream events (page_view, add_to_cart, purchase, session events)",
+  "fields": [
+    {"name": "event_id", "type": "string", "doc": "Client-generated UUID — the dedup key"},
+    {"name": "event_type", "type": {"type": "enum", "name": "EventType",
+      "symbols": ["PAGE_VIEW", "ADD_TO_CART", "REMOVE_FROM_CART", "PURCHASE", "SESSION_START", "SESSION_END"]}},
+    {"name": "user_id", "type": "string"},
+    {"name": "session_id", "type": "string"},
+    {"name": "product_id", "type": ["null", "string"], "default": null},
+    {"name": "category", "type": ["null", "string"], "default": null},
+    {"name": "price", "type": ["null", "double"], "default": null},
+    {"name": "quantity", "type": ["null", "int"], "default": null},
+    {"name": "event_time", "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "When the event actually happened on the client (event-time, used for watermarking)"},
+    {"name": "ingest_time", "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "When the producer sent it — used to measure client-side delay/buffering"},
+    {"name": "device_type", "type": {"type": "enum", "name": "DeviceType", "symbols": ["WEB", "IOS", "ANDROID"]}}
+  ]
+}

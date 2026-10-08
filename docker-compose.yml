@@ -1,0 +1,168 @@
+# ============================================================================
+# Real-time E-commerce Clickstream Pipeline — fully local, zero cloud cost.
+# Mimics the Kafka + Schema Registry + stream processor + lakehouse pattern
+# used in production at big tech, but runs entirely in Docker on your laptop.
+# ============================================================================
+
+networks:
+  streaming-net:
+    driver: bridge
+
+volumes:
+  redpanda-data:
+  localstack-data:
+
+services:
+
+  # --- Broker (Kafka API compatible) -----------------------------------
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    container_name: redpanda
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 1G
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+    ports:
+      - "19092:19092"   # Kafka API (external)
+      - "18081:18081"   # Schema Registry
+      - "18082:18082"   # HTTP proxy
+      - "9644:9644"     # Admin API
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    networks:
+      - streaming-net
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --- Web UI for topics, consumer groups, schema registry --------------
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.7.2
+    container_name: redpanda-console
+    depends_on:
+      - redpanda
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_SCHEMAREGISTRY_ENABLED: "true"
+      KAFKA_SCHEMAREGISTRY_URLS: http://redpanda:8081
+    ports:
+      - "8080:8080"
+    networks:
+      - streaming-net
+
+  # --- S3-compatible object store (stand-in for AWS S3) ------------------
+  # MinIO's free Docker images were discontinued (Oct 2025) and the repo
+  # was archived Feb 2026, so we use LocalStack instead — actively
+  # maintained, and it mocks the real AWS S3 API rather than a clone of it.
+  localstack:
+    image: localstack/localstack:3.8.1
+    container_name: localstack
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: us-east-1
+      DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"   # unified S3 API endpoint
+    volumes:
+      - localstack-data:/var/lib/localstack
+    networks:
+      - streaming-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --- Creates the buckets Iceberg/Spark will write to --------------------
+  localstack-init:
+    image: amazon/aws-cli:2.17.62
+    container_name: localstack-init
+    depends_on:
+      localstack:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      aws --endpoint-url=http://localstack:4566 s3 mb s3://warehouse &&
+      aws --endpoint-url=http://localstack:4566 s3 mb s3://warehouse-late-events &&
+      echo 'Buckets ready'
+      "
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    networks:
+      - streaming-net
+
+  # --- Iceberg REST catalog ------------------------------------------------
+  iceberg-rest:
+    image: tabulario/iceberg-rest:1.6.0
+    container_name: iceberg-rest
+    depends_on:
+      - localstack-init
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://localstack:4566
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "8181:8181"
+    networks:
+      - streaming-net
+
+  # --- Spark (driver runs jobs submitted from spark-jobs/) -----------------
+  spark:
+    image: tabulario/spark-iceberg:3.5.5_1.8.1
+    container_name: spark
+    depends_on:
+      - iceberg-rest
+      - localstack-init
+      - redpanda
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+    volumes:
+      - ./spark-jobs:/home/iceberg/spark-jobs
+      - ./notebooks:/home/iceberg/notebooks
+      - ./schemas:/home/iceberg/schemas
+    ports:
+      - "8888:8888"   # Jupyter (comes bundled with this image)
+      - "4040:4040"   # Spark UI
+    networks:
+      - streaming-net
+    tty: true
+
+  # --- Metrics ---------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - streaming-net
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    networks:
+      - streaming-net

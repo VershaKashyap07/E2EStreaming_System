@@ -1,0 +1,21 @@
+{
+  "type": "record",
+  "name": "ClickEvent",
+  "namespace": "com.akansha.ecommerce",
+  "doc": "v2 (BAD) -- adds referrer_campaign_id as a REQUIRED field with no default. This will fail BACKWARD compatibility.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": {"type": "enum", "name": "EventType",
+      "symbols": ["PAGE_VIEW", "ADD_TO_CART", "REMOVE_FROM_CART", "PURCHASE", "SESSION_START", "SESSION_END"]}},
+    {"name": "user_id", "type": "string"},
+    {"name": "session_id", "type": "string"},
+    {"name": "product_id", "type": ["null", "string"], "default": null},
+    {"name": "category", "type": ["null", "string"], "default": null},
+    {"name": "price", "type": ["null", "double"], "default": null},
+    {"name": "quantity", "type": ["null", "int"], "default": null},
+    {"name": "event_time", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "ingest_time", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "device_type", "type": {"type": "enum", "name": "DeviceType", "symbols": ["WEB", "IOS", "ANDROID"]}},
+    {"name": "referrer_campaign_id", "type": "string"}
+  ]
+}
